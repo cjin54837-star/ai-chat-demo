@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI 对话</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+  <div class="container">
+    <h1>🤖 AI 多模型对话</h1>
+
+    <div id="loginBox" class="card">
+      <h2>输入访问密码</h2>
+      <input id="passwordInput" type="password" placeholder="访问密码"/>
+      <button id="loginBtn">进入</button>
+      <p id="loginTip" class="tip"></p>
+    </div>
+
+    <div id="chatBox" class="card hidden">
+      <div class="row">
+        <label>公司：</label>
+        <select id="companySelect">
+          <option value="all">全部模型</option>
+          <option value="openai">OpenAI</option>
+          <option value="anthropic">Anthropic</option>
+          <option value="google">Google</option>
+          <option value="xai">xAI</option>
+        </select>
+        
+        <label>模型：</label>
+        <select id="modelSelect"></select>
+        
+        <button id="clearBtn" class="secondary">清空</button>
+      </div>
+
+      <div id="messages" class="messages"></div>
+
+      <div class="composer">
+        <textarea id="userInput" placeholder="输入你的问题，回车发送（Shift+回车换行）"></textarea>
+        <button id="sendBtn">发送</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
