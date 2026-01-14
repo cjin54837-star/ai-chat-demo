@@ -1,20 +1,30 @@
-// ====== 模型列表（旧的不删 + 新增 gpt-5.2-pro） ======
+// ====== 模型列表（旧的不删 + 新增） ======
 const MODEL_DATA = {
   openai: [
+    // 旧的（保留）
+    "GPT-4o",
     "GPT-5.2",
     "GPT-5.1",
     "GPT-5.1 Thinking",
     "GPT-5.2 Codex",
     "GPT-5.2 Chat Latest",
-    "gpt-5.2-pro", // 新增
+
+    // ✅ 新增：你要的
+    "gpt-5.2-pro",
   ],
-  anthropic: ["Claude Opus 4.5"],
+  anthropic: [
+    "Claude Opus 4.5",
+  ],
   google: [
+    // 旧/兼容
+    "Gemini 3 Pro",
     "Gemini 3 Pro Preview",
     "Gemini 3 Pro Preview 11-2025",
     "Gemini 3 Pro Preview Thinking",
   ],
-  xai: ["Grok-4.1"],
+  xai: [
+    "Grok-4.1",
+  ]
 };
 
 const els = {
@@ -120,7 +130,7 @@ async function sendMessage() {
   // ✅ 3.5 秒限频
   const now = Date.now();
   if (now - lastSendAt < MIN_INTERVAL_MS) {
-    addMessage("⏳ 发送太快了，3~4 秒后再发更稳（更不容易 429）", "ai");
+    addMessage("⏳ 发送太快了，等 3~4 秒再发更稳（更不容易 429）", "ai");
     return;
   }
   lastSendAt = now;
@@ -155,7 +165,8 @@ async function sendMessage() {
     if (!res.ok || !data.ok) {
       const detail = data.detail ? `\ndetail: ${data.detail}` : "";
       const raw = data.raw ? `\nraw: ${JSON.stringify(data.raw)}` : "";
-      throw new Error((data.error || "请求失败") + detail + raw);
+      const meta = data.meta ? `\nmeta: ${JSON.stringify(data.meta)}` : "";
+      throw new Error((data.error || "请求失败") + detail + meta + raw);
     }
 
     loading.textContent = data?.choices?.[0]?.message?.content || "（回复为空）";
