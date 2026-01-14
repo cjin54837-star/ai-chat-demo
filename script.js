@@ -1,30 +1,19 @@
-// ====== 模型列表（旧的不删 + 新增） ======
+// ====== 模型列表 ======
 const MODEL_DATA = {
   openai: [
-    // 旧的（保留）
-    "GPT-4o",
     "GPT-5.2",
     "GPT-5.1",
-    "GPT-5.1 Thinking",
+    "gpt-5.2-pro",
     "GPT-5.2 Codex",
     "GPT-5.2 Chat Latest",
-
-    // ✅ 新增：你要的
-    "gpt-5.2-pro",
   ],
-  anthropic: [
-    "Claude Opus 4.5",
-  ],
+  anthropic: ["Claude Opus 4.5"],
   google: [
-    // 旧/兼容
-    "Gemini 3 Pro",
     "Gemini 3 Pro Preview",
     "Gemini 3 Pro Preview 11-2025",
     "Gemini 3 Pro Preview Thinking",
   ],
-  xai: [
-    "Grok-4.1",
-  ]
+  xai: ["Grok-4.1"],
 };
 
 const els = {
@@ -113,7 +102,7 @@ async function handleLogin() {
     els.loginBox.classList.add("hidden");
     els.chatBox.classList.remove("hidden");
   } catch (e) {
-    showTip("登录失败：" + e.message);
+    showTip("登录失败: " + e.message);
   } finally {
     els.loginBtn.disabled = false;
     els.loginBtn.textContent = "进入";
@@ -124,13 +113,11 @@ async function sendMessage() {
   const text = els.userInput.value.trim();
   if (!text) return;
 
-  // ✅ 请求进行中：不允许重复发送
   if (inFlight) return;
 
-  // ✅ 3.5 秒限频
   const now = Date.now();
   if (now - lastSendAt < MIN_INTERVAL_MS) {
-    addMessage("⏳ 发送太快了，等 3~4 秒再发更稳（更不容易 429）", "ai");
+    addMessage("⏳ 发送太快了,等 3~4 秒再发更稳", "ai");
     return;
   }
   lastSendAt = now;
@@ -164,14 +151,14 @@ async function sendMessage() {
 
     if (!res.ok || !data.ok) {
       const detail = data.detail ? `\ndetail: ${data.detail}` : "";
+      const meta = data.meta ? `\n调用链路: ${JSON.stringify(data.meta.triedKeys)}` : "";
       const raw = data.raw ? `\nraw: ${JSON.stringify(data.raw)}` : "";
-      const meta = data.meta ? `\nmeta: ${JSON.stringify(data.meta)}` : "";
       throw new Error((data.error || "请求失败") + detail + meta + raw);
     }
 
-    loading.textContent = data?.choices?.[0]?.message?.content || "（回复为空）";
+    loading.textContent = data?.choices?.[0]?.message?.content || "(回复为空)";
   } catch (e) {
-    loading.textContent = "❌ 出错：" + e.message;
+    loading.textContent = "❌ 出错: " + e.message;
   } finally {
     inFlight = false;
     els.sendBtn.disabled = false;
