@@ -1,14 +1,30 @@
-// ====== 模型映射（显示名 -> 实际 model id）=====
+// ====== 模型配置映射 ======
 const MODEL_MAP = {
-  "GPT-5.2": { model: "gpt-5.2", tokenGroup: "reverse" },
-  "GPT-5.1": { model: "gpt-5.1", tokenGroup: "reverse" },
-  "GPT-4o":  { model: "gpt-4o",  tokenGroup: "reverse" },
+  // OpenAI 模型（用 YUNWU_API_KEY - 逆向分组）
+  "GPT-5.2": { type: "chat", model: "gpt-5.2", tokenGroup: "reverse" },
+  "GPT-5.1": { type: "chat", model: "gpt-5.1", tokenGroup: "reverse" },
+  "GPT-5.1 Thinking": { type: "chat", model: "gpt-5.1-thinking-all", tokenGroup: "reverse" },
+  "GPT-5.2 Codex": { type: "chat", model: "gpt-5-codex", tokenGroup: "reverse" },
+  "GPT-5.2 Chat Latest": { type: "chat", model: "gpt-5.2-chat-latest", tokenGroup: "reverse" },
 
-  "Claude Opus 4.5": { model: "claude-opus-4-5-20251101", tokenGroup: "reverse" },
-  "Grok-4.1": { model: "grok-4.1", tokenGroup: "reverse" },
+  // Anthropic 模型（用 YUNWU_API_KEY - 逆向分组）
+  "Claude Opus 4.5": { type: "chat", model: "claude-opus-4-5-20251101", tokenGroup: "reverse" },
 
-  "Gemini 3 Pro": { model: "gemini-3-pro-preview", tokenGroup: "gemini" },
+  // xAI 模型（用 YUNWU_API_KEY - 逆向分组）
+  "Grok-4.1": { type: "chat", model: "grok-4.1", tokenGroup: "reverse" },
+
+  // Google Gemini 3.0 模型（用专用 token）
+  "Gemini 3 Pro Preview": { type: "chat", model: "gemini-3-pro-preview", tokenGroup: "gemini" },
+  "Gemini 3 Pro Preview 11-2025": { type: "chat", model: "gemini-3-pro-preview-11-2025", tokenGroup: "gemini" },
+  "Gemini 3 Pro Preview Thinking": { type: "chat", model: "gemini-3-pro-preview-thinking", tokenGroup: "gemini" }
 };
+
+const UPSTREAM_URL = "https://yunwu.ai/v1/chat/completions";
+const MAX_RETRIES_PER_TOKEN = 2;
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -17,8 +33,8 @@ function jsonResponse(data, status = 200) {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    },
+      "Access-Control-Allow-Headers": "Content-Type"
+    }
   });
 }
 
@@ -30,39 +46,39 @@ async function safeReadJson(resp) {
 export async function onRequest(context) {
   const { request, env } = context;
 
-  // OPTIONS 预检
+  // 预检
   if (request.method === "OPTIONS") return new Response(null, { status: 204 });
 
   if (request.method !== "POST") {
-    return jsonResponse({ ok: false, error: "只允许 POST 请求" }, 405);
+    return jsonResponse({ ok: false, error: "Method not allowed" }, 405);
   }
 
-  // 环境变量
+  // ====== 读取环境变量（Cloudflare 用 env.xxx） ======
   const reverseKey = env.YUNWU_API_KEY;
-  const geminiKey  = env.YUNWU_GEMINI_KEY || "";
-  const accessPwd  = env.ACCESS_PASSWORD || "";
+  const geminiPromoKey = env.YUNWU_GEMINI_PROMO_KEY;
+  const geminiPremiumKey = env.YUNWU_GEMINI_PREMIUM_KEY;
+  const accessPassword = env.ACCESS_PASSWORD || "";
 
   if (!reverseKey) {
-    return jsonResponse({ ok: false, error: "后端未配置 YUNWU_API_KEY" }, 500);
+    return jsonResponse({ ok: false, error: "Missing YUNWU_API_KEY" }, 500);
   }
 
-  // 读取 body
   let body;
   try {
     body = await request.json();
-  } catch {
-    return jsonResponse({ ok: false, error: "请求体不是合法 JSON" }, 400);
+  } catch (e) {
+    return jsonResponse({ ok: false, error: "Body must be JSON" }, 400);
   }
 
-  const action = body.action || "chat";
+  const action = body.action;
 
-  // ====== 验证密码接口 ======
+  // ====== 密码验证 ======
   if (action === "check_password") {
-    if (!accessPwd) {
-      return jsonResponse({ ok: false, error: "后端未配置 ACCESS_PASSWORD" }, 500);
-    }
     const pwd = String(body.password || "");
-    if (pwd === accessPwd) return jsonResponse({ ok: true });
+    if (!accessPassword) {
+      return jsonResponse({ ok: false, error: "Missing ACCESS_PASSWORD" }, 500);
+    }
+    if (pwd === accessPassword) return jsonResponse({ ok: true }, 200);
     return jsonResponse({ ok: false, error: "密码错误" }, 401);
   }
 
@@ -70,71 +86,122 @@ export async function onRequest(context) {
     return jsonResponse({ ok: false, error: "Unknown action" }, 400);
   }
 
-  // ====== 聊天接口也必须带密码（如果设置了密码） ======
-  if (accessPwd) {
+  // 如果设置了访问密码，则 chat 也必须带 password
+  if (accessPassword) {
     const pwd = String(body.password || "");
-    if (pwd !== accessPwd) {
+    if (pwd !== accessPassword) {
       return jsonResponse({ ok: false, error: "未授权：密码错误或缺失" }, 401);
     }
   }
 
-  const displayName = String(body.model || "GPT-5.2");
+  // ====== 获取模型配置 ======
+  const displayName = String(body.model || "");
   const cfg = MODEL_MAP[displayName];
 
-  const realModelId = cfg ? cfg.model : displayName;
-  const tokenGroup = cfg ? cfg.tokenGroup : "reverse";
-
-  const messages = body.messages;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return jsonResponse({ ok: false, error: "messages 必须是非空数组" }, 400);
+  if (!cfg) {
+    return jsonResponse({ ok: false, error: `不支持的模型：${displayName}` }, 400);
   }
 
-  // 选择 token
+  const realModelId = cfg.model;
+  const tokenGroup = cfg.tokenGroup;
+  const messages = body.messages;
+
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return jsonResponse({ ok: false, error: "messages required" }, 400);
+  }
+
+  // ====== 根据 tokenGroup 选择 Token 列表 ======
   const tokenList = [];
   if (tokenGroup === "gemini") {
-    if (geminiKey) tokenList.push({ key: geminiKey, name: "Gemini" });
-    tokenList.push({ key: reverseKey, name: "Yunwu(降级)" });
+    if (geminiPromoKey) tokenList.push({ key: geminiPromoKey, name: "限时特价" });
+    if (geminiPremiumKey) tokenList.push({ key: geminiPremiumKey, name: "优质gemini" });
+
+    if (tokenList.length === 0) {
+      return jsonResponse({ ok: false, error: "Missing Gemini tokens" }, 500);
+    }
   } else {
-    tokenList.push({ key: reverseKey, name: "Yunwu" });
+    tokenList.push({ key: reverseKey, name: "逆向" });
   }
 
-  const API_URL = "https://yunwu.ai/v1/chat/completions";
-  let lastError = "未知错误";
+  // ====== 自动重试逻辑 ======
+  let lastError = "";
+  let lastRaw = null;
 
-  for (const t of tokenList) {
-    try {
-      const upstreamResp = await fetch(API_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${t.key}`,
-        },
-        body: JSON.stringify({
-          model: realModelId,
-          messages,
-          temperature: 0.7,
-          stream: false,
-        }),
-      });
+  for (const tokenInfo of tokenList) {
+    const apiKey = tokenInfo.key;
+    const tokenName = tokenInfo.name;
 
-      const data = await safeReadJson(upstreamResp);
-      const content = data?.choices?.[0]?.message?.content;
-
-      if (upstreamResp.ok && content) {
-        return jsonResponse({
-          ok: true,
-          choices: [{ message: { content } }],
-          model: displayName,
-          token_used: t.name,
+    for (let attempt = 1; attempt <= MAX_RETRIES_PER_TOKEN; attempt++) {
+      try {
+        const r = await fetch(UPSTREAM_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model: realModelId,
+            messages,
+            temperature: 0.7,
+            stream: false
+          })
         });
-      }
 
-      lastError = data?.error?.message || JSON.stringify(data);
-      if (upstreamResp.status !== 429) break; // 不是 429 就不继续换 token
-    } catch (e) {
-      lastError = String(e?.message || e);
+        const data = await safeReadJson(r);
+        lastRaw = data;
+
+        // 429：直接换下一个 token
+        if (r.status === 429) {
+          lastError = "429 Too Many Requests";
+          break;
+        }
+
+        // Invalid token：换下一个 token
+        const msg = data?.error?.message || "";
+        if (String(msg).includes("Invalid token")) {
+          lastError = `Invalid token (${tokenName})`;
+          break;
+        }
+
+        const text = data?.choices?.[0]?.message?.content ?? "";
+
+        if (r.ok && text) {
+          // ✅ 统一成前端可直接用的格式：choices[0].message.content
+          return jsonResponse({
+            ok: true,
+            model: displayName,
+            token_used: tokenName,
+            attempts: (tokenList.indexOf(tokenInfo) * MAX_RETRIES_PER_TOKEN) + attempt,
+            choices: [{ message: { content: text } }]
+          }, 200);
+        }
+
+        lastError = data?.error?.message || JSON.stringify(data);
+
+        const isRetryable =
+          String(lastError).includes("负载已饱和") ||
+          String(lastError).includes("upstream") ||
+          (r.status >= 500 && r.status <= 599);
+
+        if (!isRetryable) {
+          break;
+        }
+
+        if (attempt < MAX_RETRIES_PER_TOKEN) {
+          const delay = Math.pow(2, attempt) * 1000;
+          await sleep(delay);
+        }
+      } catch (e) {
+        lastError = String(e?.message || e);
+      }
     }
   }
 
-  return jsonResponse({ ok: false, error: "请求失败: " + lastError }, 500);
+  // ✅ 把上游返回的更多信息带回去，方便你查 openai_error 的真正原因
+  return jsonResponse({
+    ok: false,
+    error: "所有渠道均失败，请稍后再试",
+    detail: lastError,
+    raw: lastRaw
+  }, 503);
 }
