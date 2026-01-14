@@ -1,23 +1,22 @@
-// ====== 模型列表（必须和后端 MODEL_MAP 的 key 一致）=====
+// 旧模型不删 + 新增你要的 GPT 模型
 const MODEL_DATA = {
   openai: [
     "GPT-5.2",
     "GPT-5.1",
+    "gpt-5.2-pro",        // ✅ 新增
+    "GPT-5.2 Codex",
+    "GPT-5.2 Chat Latest",
     "GPT-5.1 Thinking",
     "GPT-5.2 Codex",
     "GPT-5.2 Chat Latest",
   ],
-  anthropic: [
-    "Claude Opus 4.5",
-  ],
+  anthropic: ["Claude Opus 4.5"],
   google: [
     "Gemini 3 Pro Preview",
     "Gemini 3 Pro Preview 11-2025",
     "Gemini 3 Pro Preview Thinking",
   ],
-  xai: [
-    "Grok-4.1",
-  ]
+  xai: ["Grok-4.1"],
 };
 
 const els = {
@@ -26,10 +25,8 @@ const els = {
   passwordInput: document.getElementById("passwordInput"),
   loginBtn: document.getElementById("loginBtn"),
   loginTip: document.getElementById("loginTip"),
-
   companySelect: document.getElementById("companySelect"),
   modelSelect: document.getElementById("modelSelect"),
-
   messages: document.getElementById("messages"),
   userInput: document.getElementById("userInput"),
   sendBtn: document.getElementById("sendBtn"),
@@ -46,7 +43,6 @@ document.addEventListener("DOMContentLoaded", () => {
   els.sendBtn.addEventListener("click", sendMessage);
   els.clearBtn.addEventListener("click", clearChat);
 
-  // 回车发送（Shift+Enter 换行）
   els.userInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -54,7 +50,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // 密码框回车
   els.passwordInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleLogin();
   });
@@ -67,16 +62,15 @@ function showTip(text) {
 
 function updateModelOptions(company) {
   els.modelSelect.innerHTML = "";
-
   let list = [];
-  if (company === "all") {
-    list = Object.values(MODEL_DATA).flat();
-  } else {
-    list = MODEL_DATA[company] || [];
-  }
 
-  // 兜底
-  if (list.length === 0) list = ["GPT-5.2"];
+  if (company === "all") list = Object.values(MODEL_DATA).flat();
+  else list = MODEL_DATA[company] || [];
+
+  if (!list.length) list = ["GPT-5.2"];
+
+  // 去重（避免你 openai 数组里重复项）
+  list = Array.from(new Set(list));
 
   for (const name of list) {
     const opt = document.createElement("option");
@@ -101,9 +95,7 @@ async function handleLogin() {
     });
     const data = await res.json();
 
-    if (!res.ok || !data.ok) {
-      throw new Error(data.error || "密码错误");
-    }
+    if (!res.ok || !data.ok) throw new Error(data.error || "密码错误");
 
     sessionPassword = pwd;
     els.loginBox.classList.add("hidden");
@@ -147,11 +139,11 @@ async function sendMessage() {
     if (!res.ok || !data.ok) {
       const detail = data.detail ? `\ndetail: ${data.detail}` : "";
       const raw = data.raw ? `\nraw: ${JSON.stringify(data.raw)}` : "";
-      throw new Error((data.error || "请求失败") + detail + raw);
+      const meta = data.meta ? `\nmeta: ${JSON.stringify(data.meta)}` : "";
+      throw new Error((data.error || "请求失败") + detail + raw + meta);
     }
 
-    const content = data?.choices?.[0]?.message?.content || "（回复为空）";
-    loading.textContent = content;
+    loading.textContent = data?.choices?.[0]?.message?.content || "（回复为空）";
   } catch (e) {
     loading.textContent = "❌ 出错：" + e.message;
   }
@@ -159,7 +151,7 @@ async function sendMessage() {
 
 function addMessage(text, type) {
   const div = document.createElement("div");
-  div.className = `msg ${type}`; // 对应 .msg.user / .msg.ai
+  div.className = `msg ${type}`;
   div.textContent = text;
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
