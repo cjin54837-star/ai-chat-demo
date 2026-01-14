@@ -1,14 +1,12 @@
-// 旧模型不删 + 新增你要的 GPT 模型
+// ====== 模型列表（旧的不删 + 新增 gpt-5.2-pro） ======
 const MODEL_DATA = {
   openai: [
     "GPT-5.2",
     "GPT-5.1",
-    "gpt-5.2-pro",        // ✅ 新增
-    "GPT-5.2 Codex",
-    "GPT-5.2 Chat Latest",
     "GPT-5.1 Thinking",
     "GPT-5.2 Codex",
     "GPT-5.2 Chat Latest",
+    "gpt-5.2-pro", // 新增
   ],
   anthropic: ["Claude Opus 4.5"],
   google: [
@@ -25,8 +23,10 @@ const els = {
   passwordInput: document.getElementById("passwordInput"),
   loginBtn: document.getElementById("loginBtn"),
   loginTip: document.getElementById("loginTip"),
+
   companySelect: document.getElementById("companySelect"),
   modelSelect: document.getElementById("modelSelect"),
+
   messages: document.getElementById("messages"),
   userInput: document.getElementById("userInput"),
   sendBtn: document.getElementById("sendBtn"),
@@ -34,6 +34,11 @@ const els = {
 };
 
 let sessionPassword = "";
+
+// ✅ 限频与防连点
+let inFlight = false;
+let lastSendAt = 0;
+const MIN_INTERVAL_MS = 3500; // 3.5 秒一次
 
 document.addEventListener("DOMContentLoaded", () => {
   updateModelOptions("all");
@@ -62,15 +67,12 @@ function showTip(text) {
 
 function updateModelOptions(company) {
   els.modelSelect.innerHTML = "";
-  let list = [];
 
+  let list = [];
   if (company === "all") list = Object.values(MODEL_DATA).flat();
   else list = MODEL_DATA[company] || [];
 
   if (!list.length) list = ["GPT-5.2"];
-
-  // 去重（避免你 openai 数组里重复项）
-  list = Array.from(new Set(list));
 
   for (const name of list) {
     const opt = document.createElement("option");
@@ -112,12 +114,26 @@ async function sendMessage() {
   const text = els.userInput.value.trim();
   if (!text) return;
 
+  // ✅ 请求进行中：不允许重复发送
+  if (inFlight) return;
+
+  // ✅ 3.5 秒限频
+  const now = Date.now();
+  if (now - lastSendAt < MIN_INTERVAL_MS) {
+    addMessage("⏳ 发送太快了，3~4 秒后再发更稳（更不容易 429）", "ai");
+    return;
+  }
+  lastSendAt = now;
+
   const model = els.modelSelect.value || "GPT-5.2";
 
   addMessage(text, "user");
   els.userInput.value = "";
 
   const loading = addMessage("正在思考...", "ai");
+
+  inFlight = true;
+  els.sendBtn.disabled = true;
 
   try {
     const res = await fetch("/api/chat", {
@@ -139,13 +155,15 @@ async function sendMessage() {
     if (!res.ok || !data.ok) {
       const detail = data.detail ? `\ndetail: ${data.detail}` : "";
       const raw = data.raw ? `\nraw: ${JSON.stringify(data.raw)}` : "";
-      const meta = data.meta ? `\nmeta: ${JSON.stringify(data.meta)}` : "";
-      throw new Error((data.error || "请求失败") + detail + raw + meta);
+      throw new Error((data.error || "请求失败") + detail + raw);
     }
 
     loading.textContent = data?.choices?.[0]?.message?.content || "（回复为空）";
   } catch (e) {
     loading.textContent = "❌ 出错：" + e.message;
+  } finally {
+    inFlight = false;
+    els.sendBtn.disabled = false;
   }
 }
 
