@@ -1,19 +1,23 @@
-// ====== 前端模型列表（显示用） ======
+// ====== 模型列表（必须和后端 MODEL_MAP 的 key 一致）=====
 const MODEL_DATA = {
   openai: [
-    { name: "GPT-5.2", id: "GPT-5.2" },
-    { name: "GPT-5.1", id: "GPT-5.1" },
-    { name: "GPT-4o",  id: "GPT-4o"  },
+    "GPT-5.2",
+    "GPT-5.1",
+    "GPT-5.1 Thinking",
+    "GPT-5.2 Codex",
+    "GPT-5.2 Chat Latest",
   ],
   anthropic: [
-    { name: "Claude Opus 4.5", id: "Claude Opus 4.5" },
+    "Claude Opus 4.5",
   ],
   google: [
-    { name: "Gemini 3 Pro", id: "Gemini 3 Pro" },
+    "Gemini 3 Pro Preview",
+    "Gemini 3 Pro Preview 11-2025",
+    "Gemini 3 Pro Preview Thinking",
   ],
   xai: [
-    { name: "Grok-4.1", id: "Grok-4.1" },
-  ],
+    "Grok-4.1",
+  ]
 };
 
 const els = {
@@ -32,7 +36,7 @@ const els = {
   clearBtn: document.getElementById("clearBtn"),
 };
 
-let sessionPassword = ""; // 登录成功后保存密码
+let sessionPassword = "";
 
 document.addEventListener("DOMContentLoaded", () => {
   updateModelOptions("all");
@@ -42,7 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
   els.sendBtn.addEventListener("click", sendMessage);
   els.clearBtn.addEventListener("click", clearChat);
 
-  // 回车发送
+  // 回车发送（Shift+Enter 换行）
   els.userInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -50,47 +54,44 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  // 密码回车
+  // 密码框回车
   els.passwordInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter") handleLogin();
   });
 });
-
-function updateModelOptions(company) {
-  els.modelSelect.innerHTML = "";
-
-  let options = [];
-  if (company === "all") {
-    Object.values(MODEL_DATA).forEach((list) => options.push(...list));
-  } else {
-    options = MODEL_DATA[company] || [];
-  }
-
-  // 如果没有选项，给一个兜底
-  if (options.length === 0) {
-    options = [{ name: "GPT-5.2", id: "GPT-5.2" }];
-  }
-
-  options.forEach((opt) => {
-    const option = document.createElement("option");
-    option.value = opt.id;
-    option.textContent = opt.name;
-    els.modelSelect.appendChild(option);
-  });
-}
 
 function showTip(text) {
   els.loginTip.textContent = text;
   setTimeout(() => (els.loginTip.textContent = ""), 3000);
 }
 
-// 登录：调用后端 check_password
+function updateModelOptions(company) {
+  els.modelSelect.innerHTML = "";
+
+  let list = [];
+  if (company === "all") {
+    list = Object.values(MODEL_DATA).flat();
+  } else {
+    list = MODEL_DATA[company] || [];
+  }
+
+  // 兜底
+  if (list.length === 0) list = ["GPT-5.2"];
+
+  for (const name of list) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    els.modelSelect.appendChild(opt);
+  }
+}
+
 async function handleLogin() {
   const pwd = els.passwordInput.value.trim();
   if (!pwd) return showTip("请输入密码");
 
-  els.loginBtn.textContent = "验证中...";
   els.loginBtn.disabled = true;
+  els.loginBtn.textContent = "验证中...";
 
   try {
     const res = await fetch("/api/chat", {
@@ -98,26 +99,23 @@ async function handleLogin() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "check_password", password: pwd }),
     });
-
     const data = await res.json();
 
     if (!res.ok || !data.ok) {
       throw new Error(data.error || "密码错误");
     }
 
-    // 成功：保存密码并切换界面
     sessionPassword = pwd;
     els.loginBox.classList.add("hidden");
     els.chatBox.classList.remove("hidden");
   } catch (e) {
     showTip("登录失败：" + e.message);
   } finally {
-    els.loginBtn.textContent = "进入";
     els.loginBtn.disabled = false;
+    els.loginBtn.textContent = "进入";
   }
 }
 
-// 发送消息
 async function sendMessage() {
   const text = els.userInput.value.trim();
   if (!text) return;
@@ -136,7 +134,7 @@ async function sendMessage() {
       body: JSON.stringify({
         action: "chat",
         model,
-        password: sessionPassword, // ✅ 必须带密码（因为后端会拦截）
+        password: sessionPassword,
         messages: [
           { role: "system", content: "你是一个乐于助人的 AI 助手。" },
           { role: "user", content: text },
@@ -147,7 +145,9 @@ async function sendMessage() {
     const data = await res.json();
 
     if (!res.ok || !data.ok) {
-      throw new Error(data.error || "请求失败");
+      const detail = data.detail ? `\ndetail: ${data.detail}` : "";
+      const raw = data.raw ? `\nraw: ${JSON.stringify(data.raw)}` : "";
+      throw new Error((data.error || "请求失败") + detail + raw);
     }
 
     const content = data?.choices?.[0]?.message?.content || "（回复为空）";
@@ -159,7 +159,7 @@ async function sendMessage() {
 
 function addMessage(text, type) {
   const div = document.createElement("div");
-  div.className = `msg ${type}`; // ✅ 对应 .msg.user / .msg.ai
+  div.className = `msg ${type}`; // 对应 .msg.user / .msg.ai
   div.textContent = text;
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
