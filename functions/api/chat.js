@@ -2,31 +2,79 @@ const DEFAULT_BASE_URL = "https://yunwu.ai";
 const MAX_RETRIES_PER_KEY = 3;
 const BACKOFF_BASE_MS = 2500;
 
-// 显示名 -> 上游模型名
+// ========== 模型配置 ==========
+// upstreamModel: 上游 API 的模型名
+// endpoint: "chat" 或 "responses" (优先用 responses,失败自动降级到 chat)
+// keyPools: 密钥池调用链路(按顺序尝试,便宜的在前)
+
 const MODEL_MAP = {
-  // 旧的（保留）
-  "GPT-4o": { upstreamModel: "gpt-4o", endpoint: "chat", keyPool: "OPENAI" },
+  // === OpenAI 系列 ===
+  
+  // 通用 GPT 模型(按成本链路: 限时特价→Default→逆向→纯AZ→官转)
+  "GPT-5.2": {
+    upstreamModel: "gpt-5.2",
+    endpoint: "responses", // 优先用 responses,失败自动降级
+    keyPools: ["OPENAI_PROMO", "OPENAI_DEFAULT", "OPENAI_REVERSE", "OPENAI_PURE_AZ", "OPENAI_OFFICIAL"]
+  },
+  "GPT-5.1": {
+    upstreamModel: "gpt-5.1",
+    endpoint: "responses",
+    keyPools: ["OPENAI_PROMO", "OPENAI_DEFAULT", "OPENAI_REVERSE", "OPENAI_PURE_AZ", "OPENAI_OFFICIAL"]
+  },
+  "GPT-5.2 Chat Latest": {
+    upstreamModel: "gpt-5.2-chat-latest",
+    endpoint: "responses",
+    keyPools: ["OPENAI_PROMO", "OPENAI_DEFAULT", "OPENAI_REVERSE", "OPENAI_PURE_AZ", "OPENAI_OFFICIAL"]
+  },
 
-  // 你要的 GPT 模型
-  "GPT-5.2": { upstreamModel: "gpt-5.2", endpoint: "chat", keyPool: "OPENAI" },
-  "GPT-5.1": { upstreamModel: "gpt-5.1", endpoint: "chat", keyPool: "OPENAI" },
-  "GPT-5.1 Thinking": { upstreamModel: "gpt-5.1-thinking-all", endpoint: "chat", keyPool: "OPENAI" },
-  "GPT-5.2 Codex": { upstreamModel: "gpt-5-codex", endpoint: "chat", keyPool: "OPENAI" },
-  "GPT-5.2 Chat Latest": { upstreamModel: "gpt-5.2-chat-latest", endpoint: "chat", keyPool: "OPENAI" },
+  // gpt-5.2-pro: 只能用"优质官转OpenAI分组"
+  "gpt-5.2-pro": {
+    upstreamModel: "gpt-5.2-pro",
+    endpoint: "responses", // 只支持 responses
+    keyPools: ["GPT52PRO"] // 单独的密钥池
+  },
 
-  // ✅ gpt-5.2-pro：按你给的信息，只支持 /v1/responses
-  "gpt-5.2-pro": { upstreamModel: "gpt-5.2-pro", endpoint: "responses", keyPool: "OPENAI" },
+  // GPT-5.2 Codex: 只能用"Codex专属分组"
+  "GPT-5.2 Codex": {
+    upstreamModel: "gpt-5-codex",
+    endpoint: "responses",
+    keyPools: ["CODEX"] // 单独的密钥池
+  },
 
-  // 旧的（保留）
-  "Claude Opus 4.5": { upstreamModel: "claude-opus-4-5-20251101", endpoint: "chat", keyPool: "OPENAI" },
-  "Grok-4.1": { upstreamModel: "grok-4.1", endpoint: "chat", keyPool: "OPENAI" },
+  // === Anthropic ===
+  "Claude Opus 4.5": {
+    upstreamModel: "claude-opus-4-5-20251101",
+    endpoint: "chat",
+    keyPools: ["OPENAI_DEFAULT", "OPENAI_OFFICIAL"] // Claude 一般用 Default 或官转
+  },
 
-  "Gemini 3 Pro": { upstreamModel: "gemini-3-pro-preview", endpoint: "chat", keyPool: "GEMINI" },
-  "Gemini 3 Pro Preview": { upstreamModel: "gemini-3-pro-preview", endpoint: "chat", keyPool: "GEMINI" },
-  "Gemini 3 Pro Preview 11-2025": { upstreamModel: "gemini-3-pro-preview-11-2025", endpoint: "chat", keyPool: "GEMINI" },
-  "Gemini 3 Pro Preview Thinking": { upstreamModel: "gemini-3-pro-preview-thinking", endpoint: "chat", keyPool: "GEMINI" },
+  // === xAI ===
+  "Grok-4.1": {
+    upstreamModel: "grok-4.1",
+    endpoint: "chat",
+    keyPools: ["OPENAI_DEFAULT", "OPENAI_OFFICIAL"]
+  },
+
+  // === Google Gemini ===
+  // 调用链路: 限时特价 → 优质Gemini
+  "Gemini 3 Pro Preview": {
+    upstreamModel: "gemini-3-pro-preview",
+    endpoint: "chat", // Gemini 用 chat (兼容 OpenAI 格式)
+    keyPools: ["GEMINI_PROMO", "GEMINI_PREMIUM"]
+  },
+  "Gemini 3 Pro Preview 11-2025": {
+    upstreamModel: "gemini-3-pro-preview-11-2025",
+    endpoint: "chat",
+    keyPools: ["GEMINI_PROMO", "GEMINI_PREMIUM"]
+  },
+  "Gemini 3 Pro Preview Thinking": {
+    upstreamModel: "gemini-3-pro-preview-thinking",
+    endpoint: "chat",
+    keyPools: ["GEMINI_PROMO", "GEMINI_PREMIUM"]
+  },
 };
 
+// ========== 工具函数 ==========
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
@@ -53,121 +101,211 @@ function parseKeys(raw) {
 
 async function safeReadJson(resp) {
   const text = await resp.text();
-  try { return JSON.parse(text); } catch { return { raw: text }; }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
 }
 
+// 构建 URL (支持 chat 和 responses 双端点)
 function buildUrl(baseUrl, endpoint) {
   return endpoint === "responses"
     ? `${baseUrl}/v1/responses`
     : `${baseUrl}/v1/chat/completions`;
 }
 
+// 构建请求体
 function buildPayload(endpoint, model, messages, temperature) {
   if (endpoint === "responses") {
-    // Responses API：用 input 承载 messages（多数代理兼容）
-    return { model, input: messages, temperature };
+    return {
+      model,
+      input: messages, // responses 用 input
+      temperature,
+    };
   }
-  return { model, messages, temperature, stream: false };
+  return {
+    model,
+    messages,
+    temperature,
+    stream: false,
+  };
 }
 
+// 提取回复文本(兼容 chat 和 responses 格式)
 function extractText(endpoint, data) {
   if (endpoint === "responses") {
-    if (typeof data?.output_text === "string" && data.output_text.trim()) return data.output_text;
-
+    // responses 格式: output_text 或 output[0].content[0].text
+    if (typeof data?.output_text === "string" && data.output_text.trim()) {
+      return data.output_text;
+    }
     const out0 = data?.output?.[0];
     const c0 = out0?.content?.[0];
-    if (typeof c0?.text === "string" && c0.text.trim()) return c0.text;
-
-    // 兜底：有些代理仍返回 chat 风格
+    if (typeof c0?.text === "string" && c0.text.trim()) {
+      return c0.text;
+    }
+    // 兜底: 有些代理仍返回 chat 风格
     const chatText = data?.choices?.[0]?.message?.content;
     return typeof chatText === "string" ? chatText : "";
   }
 
+  // chat 格式
   const text = data?.choices?.[0]?.message?.content;
   return typeof text === "string" ? text : "";
 }
 
+// 获取密钥池
 function getKeyPool(env, poolName) {
-  // 你的省钱方案：把多个 key 塞进 YUNWU_API_KEY（逗号分隔）
-  if (poolName === "OPENAI") {
-    return parseKeys(env.YUNWU_API_KEY);
-  }
-  if (poolName === "GEMINI") {
-    // Gemini：优先 promo，再 premium（都支持逗号分隔）
-    const promo = parseKeys(env.YUNWU_GEMINI_PROMO_KEY);
-    const premium = parseKeys(env.YUNWU_GEMINI_PREMIUM_KEY);
-    return [...promo, ...premium];
-  }
-  return [];
+  const poolMap = {
+    // OpenAI 通用链路
+    OPENAI_PROMO: parseKeys(env.YUNWU_OPENAI_PROMO),
+    OPENAI_DEFAULT: parseKeys(env.YUNWU_OPENAI_DEFAULT),
+    OPENAI_REVERSE: parseKeys(env.YUNWU_OPENAI_REVERSE),
+    OPENAI_PURE_AZ: parseKeys(env.YUNWU_OPENAI_PURE_AZ),
+    OPENAI_OFFICIAL: parseKeys(env.YUNWU_OPENAI_OFFICIAL),
+
+    // gpt-5.2-pro 专属
+    GPT52PRO: parseKeys(env.YUNWU_GPT52PRO_KEY),
+
+    // Codex 专属
+    CODEX: parseKeys(env.YUNWU_CODEX_KEY),
+
+    // Gemini 链路
+    GEMINI_PROMO: parseKeys(env.YUNWU_GEMINI_PROMO),
+    GEMINI_PREMIUM: parseKeys(env.YUNWU_GEMINI_PREMIUM),
+  };
+
+  return poolMap[poolName] || [];
 }
 
-async function callUpstreamWithRetries({ env, endpoint, model, messages, temperature, keys }) {
-  const baseUrl = env.UPSTREAM_BASE_URL || DEFAULT_BASE_URL;
+// 单次 API 调用(支持端点降级: responses → chat)
+async function callApi({ baseUrl, endpoint, model, messages, temperature, key }) {
   const url = buildUrl(baseUrl, endpoint);
+
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify(buildPayload(endpoint, model, messages, temperature)),
+    });
+
+    const data = await safeReadJson(resp);
+
+    return {
+      ok: resp.ok,
+      status: resp.status,
+      data,
+      text: resp.ok ? extractText(endpoint, data) : "",
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      status: 500,
+      data: { error: String(e?.message || e) },
+      text: "",
+    };
+  }
+}
+
+// 多密钥 + 多端点重试逻辑
+async function callUpstreamWithRetries({ env, preferredEndpoint, model, messages, temperature, keyPools }) {
+  const baseUrl = env.UPSTREAM_BASE_URL || DEFAULT_BASE_URL;
 
   let lastDetail = "";
   let lastRaw = null;
   let lastStatus = 500;
+  const triedKeys = [];
 
-  for (let i = 0; i < keys.length; i++) {
-    const key = keys[i];
+  // 遍历所有密钥池(按成本链路顺序)
+  for (const poolName of keyPools) {
+    const keys = getKeyPool(env, poolName);
+    if (!keys.length) continue; // 跳过空池
 
-    for (let attempt = 1; attempt <= MAX_RETRIES_PER_KEY; attempt++) {
-      try {
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${key}`,
-          },
-          body: JSON.stringify(buildPayload(endpoint, model, messages, temperature)),
+    // 遍历当前池的所有密钥
+    for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
+      const key = keys[keyIndex];
+      triedKeys.push({ pool: poolName, keyIndex: keyIndex + 1 });
+
+      // 每个密钥重试 MAX_RETRIES_PER_KEY 次
+      for (let attempt = 1; attempt <= MAX_RETRIES_PER_KEY; attempt++) {
+        // 1. 优先用 preferredEndpoint
+        let result = await callApi({
+          baseUrl,
+          endpoint: preferredEndpoint,
+          model,
+          messages,
+          temperature,
+          key,
         });
 
-        const data = await safeReadJson(resp);
-        lastRaw = data;
-        lastStatus = resp.status;
+        // 2. 如果 preferredEndpoint 是 responses 且失败,自动降级到 chat
+        if (!result.ok && preferredEndpoint === "responses") {
+          result = await callApi({
+            baseUrl,
+            endpoint: "chat",
+            model,
+            messages,
+            temperature,
+            key,
+          });
+        }
 
-        if (resp.status === 429) {
+        lastRaw = result.data;
+        lastStatus = result.status;
+
+        // 成功返回
+        if (result.ok && result.text) {
+          return {
+            ok: true,
+            text: result.text,
+            raw: result.data,
+            meta: {
+              model,
+              endpoint: preferredEndpoint,
+              poolName,
+              keyIndex: keyIndex + 1,
+              attempt,
+              triedKeys,
+            },
+          };
+        }
+
+        // 429 退避重试
+        if (result.status === 429) {
           lastDetail = "429 Too Many Requests";
-          const delay = Math.pow(2, attempt) * BACKOFF_BASE_MS; // 2500, 5000, 10000...
+          const delay = Math.pow(2, attempt) * BACKOFF_BASE_MS;
           await sleep(delay);
           continue; // 同一个 key 再试
         }
 
-        if (resp.status === 401 || resp.status === 403) {
-          lastDetail = `Auth failed (${resp.status})`;
-          break; // 换下一个 key
+        // 401/403: 密钥无效,换下一个密钥
+        if (result.status === 401 || result.status === 403) {
+          lastDetail = `Auth failed (${result.status})`;
+          break;
         }
 
-        const text = extractText(endpoint, data);
-        if (resp.ok && text) {
-          return {
-            ok: true,
-            text,
-            raw: data,
-            meta: { endpoint, model, keyIndex: i + 1, attempt, totalKeys: keys.length },
-          };
-        }
-
-        lastDetail = data?.error?.message || JSON.stringify(data);
-        break; // 不是 429 就不在同 key 内死磕
-      } catch (e) {
-        lastDetail = String(e?.message || e);
-        lastStatus = 500;
+        // 其他错误: 记录后换下一个密钥
+        lastDetail = result.data?.error?.message || JSON.stringify(result.data);
+        break;
       }
     }
   }
 
+  // 所有密钥池都失败
   return {
     ok: false,
     status: lastStatus === 429 ? 429 : 503,
-    error: "所有渠道均失败，请稍后再试",
+    error: "所有密钥池均失败,请稍后再试",
     detail: lastDetail,
     raw: lastRaw,
-    meta: { endpoint, model },
+    meta: { model, triedKeys },
   };
 }
 
+// ========== 主处理函数 ==========
 export async function onRequest(context) {
   const { request, env } = context;
 
@@ -199,13 +337,13 @@ export async function onRequest(context) {
   if (accessPassword) {
     const pwd = String(body.password || "");
     if (pwd !== accessPassword) {
-      return jsonResponse({ ok: false, error: "未授权：密码错误或缺失" }, 401);
+      return jsonResponse({ ok: false, error: "未授权: 密码错误或缺失" }, 401);
     }
   }
 
   const displayName = String(body.model || "");
   const cfg = MODEL_MAP[displayName];
-  if (!cfg) return jsonResponse({ ok: false, error: `不支持的模型：${displayName}` }, 400);
+  if (!cfg) return jsonResponse({ ok: false, error: `不支持的模型: ${displayName}` }, 400);
 
   const messages = body.messages;
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -214,35 +352,34 @@ export async function onRequest(context) {
 
   const temperature = typeof body.temperature === "number" ? body.temperature : 0.7;
 
-  const keys = getKeyPool(env, cfg.keyPool);
-  if (!keys.length) {
-    const need =
-      cfg.keyPool === "GEMINI"
-        ? "缺少 YUNWU_GEMINI_PROMO_KEY / YUNWU_GEMINI_PREMIUM_KEY"
-        : "缺少 YUNWU_API_KEY";
-    return jsonResponse({ ok: false, error: need }, 500);
-  }
-
   const result = await callUpstreamWithRetries({
     env,
-    endpoint: cfg.endpoint,
+    preferredEndpoint: cfg.endpoint,
     model: cfg.upstreamModel,
     messages,
     temperature,
-    keys,
+    keyPools: cfg.keyPools,
   });
 
   if (!result.ok) {
     return jsonResponse(
-      { ok: false, error: result.error, detail: result.detail, meta: result.meta, raw: result.raw },
+      {
+        ok: false,
+        error: result.error,
+        detail: result.detail,
+        meta: result.meta,
+        raw: result.raw,
+      },
       result.status
     );
   }
 
-  // 统一返回格式：choices[0].message.content
-  return jsonResponse({
-    ok: true,
-    choices: [{ message: { content: result.text } }],
-    meta: result.meta,
-  }, 200);
+  return jsonResponse(
+    {
+      ok: true,
+      choices: [{ message: { content: result.text } }],
+      meta: result.meta,
+    },
+    200
+  );
 }
