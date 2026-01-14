@@ -137,9 +137,7 @@ button:disabled {
 }
 
 /* 滚动条样式 */
-.messages::-webkit-scrollbar {
-  width: 8px;
-}
+.messages::-webkit-scrollbar { width: 8px; }
 .messages::-webkit-scrollbar-track {
   background: rgba(0,0,0,0.2);
   border-radius: 4px;
